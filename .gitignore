@@ -1,0 +1,6 @@
+*.ipynb_checkpoints*
+nbconvert/*
+.fuse*
+*__pycache__*
+*.h5
+trainings/
