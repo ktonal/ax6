@@ -4,3 +4,4 @@ nbconvert/*
 *__pycache__*
 *.h5
 trainings/
+train-data/

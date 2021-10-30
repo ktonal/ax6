@@ -15,13 +15,14 @@ class MyEncoder(json.JSONEncoder):
 
 
 def train(
-        soundbank,
+        soundbank: h5m.TypedFile,
         net,
-
+        root_dir='./trainings',
         batch_size=16,
         batch_length=32,
         downsampling=1,
         shift_error=0,
+        tbptt_len=None,
 
         max_epochs=2,
         limit_train_batches=1000,
@@ -41,26 +42,41 @@ def train(
         n_examples=3,
         prompt_length=32,
         n_steps=200,
-        temperature=torch.tensor([[.85] * 200]),
+        temperature=None,
+        # additional hyper-params:
+        **kwargs
 ):
     train_hp = dict(locals())
     train_hp.pop("net")
     train_hp.pop("soundbank")
-    train_hp.pop("temperature")
+    train_hp.pop("root_dir")
+    train_hp.pop("kwargs")
+    train_hp["temperature"] = temperature[0] if temperature is not None else temperature
     hp = dict(files=list(soundbank.index.keys()),
               network_class=net.__class__.__qualname__,
               network=net.hp,
+              **kwargs,
               train_hp=train_hp)
     ID = hashlib.sha256(json.dumps(hp, cls=MyEncoder).encode("utf-8")).hexdigest()
     print("****************************************************")
-    print("ID IS :", ID)
+    print("ID IS :", ID, "for", hp["files"])
     print("****************************************************")
     hp['id'] = ID
-    os.makedirs(f"trainings/{ID}/outputs", exist_ok=True)
-    filename_template = f"trainings/{ID}/outputs/" + "epoch{epoch}_prm{prompt_idx}.wav"
-    with open(f"trainings/{ID}/hp.json", "w") as fp:
+    root_dir = os.path.join(root_dir, ID)
+    os.makedirs(root_dir, exist_ok=True)
+    if "mp3" in OUTPUT_TRAINING:
+        output_dir = os.path.join(root_dir, "outputs")
+        os.makedirs(output_dir, exist_ok=True)
+        filename_template = os.path.join(output_dir, "epoch{epoch}_prm{prompt_idx}.wav")
+    else:
+        filename_template = ""
+
+    with open(os.path.join(root_dir, "hp.json"), "w") as fp:
         json.dump(hp, fp, cls=MyEncoder)
-    logs_file = f"trainings/{ID}/checkpoints.h5"
+    if "h5" in OUTPUT_TRAINING or CHECKPOINT_TRAINING:
+        logs_file = os.path.join(root_dir, "checkpoints.h5")
+    else:
+        logs_file = None
 
     dl = net.train_dataloader(soundbank,
                               batch_size=batch_size,
@@ -80,11 +96,11 @@ def train(
         pct_start=pct_start,
         cycle_momentum=cycle_momentum
     )
-
     tr_loop = mmk.TrainLoop(
         loader=dl,
         net=net,
         loss_fn=net.feature.loss_fn,
+        tbptt_len=tbptt_len,
         optim=([opt], [{"scheduler": sched, "interval": "step", "frequency": 1}])
     )
 
@@ -104,13 +120,17 @@ def train(
         interfaces=g_interfaces,
         n_steps=n_steps,
         device='cuda' if torch.cuda.is_available() else 'cpu',
+        time_hop=net.hp.get("hop", 1)
     )
 
     class Logs(h5m.TypedFile):
         ckpt = h5m.TensorDict(net.state_dict()) if CHECKPOINT_TRAINING else None
         outputs = h5m.Array() if 'h5' in OUTPUT_TRAINING else None
 
-    logs = Logs(logs_file, mode='w')
+    if "h5" in OUTPUT_TRAINING or CHECKPOINT_TRAINING:
+        logs = Logs(logs_file, mode='w')
+    else: logs = None
+
     callbacks = []
 
     if CHECKPOINT_TRAINING:
@@ -146,7 +166,7 @@ def train(
                 )
 
     soundbank.close()
-    os.remove("train.h5")
+    os.remove(soundbank.filename)
 
 
 def generate(
@@ -197,7 +217,7 @@ def generate(
         interfaces=g_interfaces,
         n_steps=n_steps,
         process_outputs=process_outputs,
-        # time_hop=getattr(net.feature, 'hop_length', 1),
+        time_hop=getattr(net.hp, 'hop', 1),
         device='cuda' if torch.cuda.is_available() else 'cpu',
     )
 

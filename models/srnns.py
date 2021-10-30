@@ -1,30 +1,36 @@
+from os import cpu_count
+
 import mimikit as mmk
 import h5mapper as h5m
 
 
 class SRNNBase(mmk.TierNetwork):
-
     feature: mmk.Feature = None
 
     def train_dataloader(self, soundbank, batch_size, batch_length,
-                         downsampling=1, shift_error=0,
-                         chunk_length=16000 * 8):
-        getters = self.getters(batch_length=batch_length, shift_error=shift_error)
-        batch = (
-            tuple(h5m.Input(key='snd', getter=g_input,
-                            transform=self.feature.transform)
-                  for g_input in getters['inputs']),
-            h5m.Target(key='snd', getter=getters['targets'],
-                       transform=self.feature.transform),
-        )
+                         downsampling=None, shift_error=0, **kwargs):
+        batch = (tuple(
+            self.feature.batch_item(shift=self.shift - fs,
+                                    length=batch_length, frame_size=fs,
+                                    as_strided=False)
+            for fs in self.frame_sizes[:-1]
+        ) + (
+                     self.feature.batch_item(shift=self.shift - self.frame_sizes[-1],
+                                             length=batch_length, frame_size=self.frame_sizes[-1],
+                                             as_strided=True),
+                 ),
+                 self.feature.batch_item(shift=self.shift + shift_error,
+                                         length=batch_length,)
+                 )
         dl = soundbank.serve(batch,
-                             num_workers=min(batch_size, 16),
+                             num_workers=min(batch_size, cpu_count()),
                              pin_memory=True,
                              persistent_workers=True,  # need this!
                              batch_sampler=mmk.TBPTTSampler(soundbank.snd.shape[0],
                                                             batch_size=batch_size,
-                                                            chunk_length=chunk_length,
-                                                            seq_len=batch_length))
+                                                            chunk_length=self.hp.chunk_length,
+                                                            seq_len=batch_length,
+                                                            downsampling=downsampling))
         return dl
 
     def generate_dataloader_and_interfaces(self,
@@ -35,9 +41,7 @@ class SRNNBase(mmk.TierNetwork):
                                            temperature=None,
                                            **kwargs
                                            ):
-        gen_batch = (h5m.Input(key='snd',
-                               getter=h5m.AsSlice(dim=0, shift=0, length=prompt_length),
-                               transform=self.feature.transform),)
+        gen_batch = (self.feature.batch_item(shift=0, length=prompt_length, ),)
         gen_dl = soundbank.serve(gen_batch,
                                  shuffle=False,
                                  batch_size=batch_size,
@@ -58,3 +62,11 @@ class SRNNBase(mmk.TierNetwork):
             ),) if temperature is not None else ())
         ]
         return gen_dl, interfaces
+
+
+class SampleRNN(mmk.SampleRNN, SRNNBase):
+
+    def __init__(self, feature, chunk_length=16000 * 8, **net_hp):
+        super(SampleRNN, self).__init__(**net_hp)
+        self.feature = self.hp.feature = feature
+        self.hp.chunk_length = chunk_length

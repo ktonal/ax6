@@ -1,26 +1,27 @@
+from os import cpu_count
+
 import mimikit as mmk
 import h5mapper as h5m
 from itertools import chain
 
 
 class WaveNetBase(mmk.WNBlock):
-
     feature: mmk.Feature = None
 
     def train_dataloader(self, soundbank, batch_size, batch_length,
                          downsampling=1, shift_error=0, batch_sampler=None):
-        getters = self.getters(batch_length=batch_length,
-                               downsampling=downsampling,
-                               hop_length=getattr(self.feature, 'hop_length', 1),
-                               shift_error=shift_error
-                               )
         batch = (
-            h5m.Input(key='snd', getter=getters['inputs'], transform=self.feature.transform),
-            h5m.Target(key='snd', getter=getters['targets'], transform=self.feature.transform),
+            # input
+            self.feature.batch_item(shift=0, length=batch_length, downsampling=downsampling),
+            # target
+            self.feature.batch_item(shift=self.shift + shift_error,
+                                    length=(batch_length if (self.hp.pad_side != 0)
+                                            else batch_length - self.shift + 1),
+                                    downsampling=downsampling)
         )
         return soundbank.serve(batch,
                                batch_size=batch_size,
-                               num_workers=min(batch_size, 16),
+                               num_workers=min(batch_size, cpu_count()),
                                pin_memory=True,
                                persistent_workers=True,  # need this!
                                shuffle=True,
@@ -35,14 +36,8 @@ class WaveNetBase(mmk.WNBlock):
                                            temperature=None,
                                            **kwargs
                                            ):
-        gen_getters = self.getters(batch_length=prompt_length,
-                                   downsampling=1,
-                                   hop_length=getattr(self.feature, 'hop_length', 1),
-                                   shift_error=0)
-        gen_batch = (h5m.Input(key="snd",
-                               getter=gen_getters['inputs'],
-                               transform=self.feature.transform),)
-        gen_dl = soundbank.serve(gen_batch,
+        batch = (self.feature.batch_item(shift=0, length=prompt_length, downsampling=1), )
+        gen_dl = soundbank.serve(batch,
                                  shuffle=False,
                                  batch_size=batch_size,
                                  sampler=indices)
@@ -65,7 +60,6 @@ class WaveNetBase(mmk.WNBlock):
 
 
 class WaveNetQx(WaveNetBase):
-
     feature = mmk.MuLawSignal(sr=16000, q_levels=256, normalize=True)
 
     def __init__(self, feature=None, mlp_dim=128, **block_hp):
@@ -82,7 +76,6 @@ class WaveNetQx(WaveNetBase):
 
 
 class WaveNetFFT(WaveNetBase):
-
     feature = mmk.Spectrogram(sr=22050, n_fft=2048, hop_length=512, coordinate='mag')
 
     def __init__(self,
@@ -105,4 +98,3 @@ class WaveNetFFT(WaveNetBase):
         outpt_mods = [self.feature.output_module(out_d, fft_dim, output_heads,
                                                  scaled_activation=scaled_activation)]
         self.with_io(inpt_mods, outpt_mods)
-
