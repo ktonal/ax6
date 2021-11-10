@@ -1,65 +1,8 @@
-from os import cpu_count
-
 import mimikit as mmk
-import h5mapper as h5m
 from itertools import chain
 
 
-class WaveNetBase(mmk.WNBlock):
-    feature: mmk.Feature = None
-
-    def train_dataloader(self, soundbank, batch_size, batch_length,
-                         downsampling=1, shift_error=0, batch_sampler=None):
-        batch = (
-            # input
-            self.feature.batch_item(shift=0, length=batch_length, downsampling=downsampling),
-            # target
-            self.feature.batch_item(shift=self.shift + shift_error,
-                                    length=(batch_length if (self.hp.pad_side != 0)
-                                            else batch_length - self.shift + 1),
-                                    downsampling=downsampling)
-        )
-        return soundbank.serve(batch,
-                               batch_size=batch_size,
-                               num_workers=min(batch_size, cpu_count()),
-                               pin_memory=True,
-                               persistent_workers=True,  # need this!
-                               shuffle=True,
-                               batch_sampler=batch_sampler
-                               )
-
-    def generate_dataloader_and_interfaces(self,
-                                           soundbank,
-                                           prompt_length,
-                                           indices=(),
-                                           batch_size=256,
-                                           temperature=None,
-                                           **kwargs
-                                           ):
-        batch = (self.feature.batch_item(shift=0, length=prompt_length, downsampling=1), )
-        gen_dl = soundbank.serve(batch,
-                                 shuffle=False,
-                                 batch_size=batch_size,
-                                 sampler=indices)
-        interfaces = [
-            *(mmk.DynamicDataInterface(
-                None,
-                getter=h5m.AsSlice(dim=1, shift=-self.rf, length=self.rf),
-                setter=mmk.Setter(dim=1),
-                output_transform=(lambda x: x.unsqueeze(1) if isinstance(self.feature, mmk.Spectrogram) else x)
-            ),),
-            # temperature
-            *((mmk.DynamicDataInterface(
-                None if callable(temperature) else temperature,
-                prepare=(lambda src: temperature()) if callable(temperature) else lambda src: src,
-                getter=h5m.AsSlice(dim=1, shift=0, length=1),
-                setter=None,
-            ),) if temperature is not None and "temperature" in self.s else ())
-        ]
-        return gen_dl, interfaces
-
-
-class WaveNetQx(WaveNetBase):
+class WaveNetQx(mmk.WNBlock):
     feature = mmk.MuLawSignal(sr=16000, q_levels=256, normalize=True)
 
     def __init__(self, feature=None, mlp_dim=128, **block_hp):
@@ -75,7 +18,7 @@ class WaveNetQx(WaveNetBase):
         self.with_io(inpt_mods, outpt_mods)
 
 
-class WaveNetFFT(WaveNetBase):
+class WaveNetFFT(mmk.WNBlock):
     feature = mmk.Spectrogram(sr=22050, n_fft=2048, hop_length=512, coordinate='mag')
 
     def __init__(self,

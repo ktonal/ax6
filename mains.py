@@ -17,12 +17,15 @@ class MyEncoder(json.JSONEncoder):
 def train(
         soundbank: h5m.TypedFile,
         net,
+        input_feature=mmk.AudioSignal(sr=22050),
+        target_feature=mmk.AudioSignal(sr=22050),
         root_dir='./trainings',
         batch_size=16,
         batch_length=32,
         downsampling=1,
         shift_error=0,
-        tbptt_len=None,
+        tbptt_chunk_length=None,
+        oversampling=1,
 
         max_epochs=2,
         limit_train_batches=1000,
@@ -78,12 +81,29 @@ def train(
     else:
         logs_file = None
 
-    dl = net.train_dataloader(soundbank,
-                              batch_size=batch_size,
-                              batch_length=batch_length,
-                              downsampling=downsampling,
-                              shift_error=shift_error,
-                              )
+    # DATALOADER
+    batch = (
+        input_feature.batch_item(shift=0, length=batch_length, downsampling=downsampling),
+        target_feature.batch_item(shift=net.shift, length=net.output_length(batch_length), downsampling=downsampling)
+    )
+    if tbptt_chunk_length is not None:
+        loader_kwargs = dict(
+            batch_sampler=mmk.TBPTTSampler(
+                soundbank.snd.shape[0] // getattr(input_feature, 'hop_length', 1),
+                batch_size=batch_size,
+                chunk_length=tbptt_chunk_length,
+                seq_len=batch_length,
+                oversampling=oversampling
+            )
+        )
+    else:
+        loader_kwargs = dict(batch_size=batch_size, shuffle=True)
+    dl = soundbank.serve(batch,
+                         num_workers=min(batch_size, os.cpu_count()),
+                         pin_memory=True,
+                         persistent_workers=True,
+                         **loader_kwargs
+                         )
 
     opt = torch.optim.Adam(net.parameters(), lr=max_lr, betas=betas)
     sched = torch.optim.lr_scheduler.OneCycleLR(
@@ -99,25 +119,28 @@ def train(
     tr_loop = mmk.TrainLoop(
         loader=dl,
         net=net,
-        loss_fn=net.feature.loss_fn,
-        tbptt_len=tbptt_len,
+        loss_fn=target_feature.loss_fn,
+        tbptt_len=tbptt_chunk_length // batch_length if tbptt_chunk_length is not None else None,
         optim=([opt], [{"scheduler": sched, "interval": "step", "frequency": 1}])
     )
 
     # Gen Loop
-    max_i = soundbank.snd.shape[0] - getattr(net.feature, "hop_length", 1) * prompt_length
-    g_dl, g_interfaces = net.generate_dataloader_and_interfaces(
-        soundbank,
-        prompt_length=prompt_length,
-        indices=mmk.IndicesSampler(N=n_examples,
+    max_i = soundbank.snd.shape[0] - getattr(input_feature, "hop_length", 1) * prompt_length
+    g_dl = soundbank.serve(
+        (input_feature.batch_item(shift=0, length=prompt_length, training=False),),
+        sampler=mmk.IndicesSampler(N=n_examples,
                                    max_i=max_i,
                                    redraw=True),
-        temperature=temperature
+        shuffle=False,
+        batch_size=n_examples
     )
     gen_loop = mmk.GenerateLoop(
         network=net,
         dataloader=g_dl,
-        interfaces=g_interfaces,
+        inputs=(h5m.Input(None, h5m.AsSlice(dim=1, shift=-net.rf, length=net.rf),
+                          setter=h5m.Setter(dim=1)),
+                *((h5m.Input(temperature, h5m.AsSlice(dim=1, length=1), setter=None), )
+                if temperature is not None else ())),
         n_steps=n_steps,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         time_hop=net.hp.get("hop", 1)
@@ -129,7 +152,8 @@ def train(
 
     if "h5" in OUTPUT_TRAINING or CHECKPOINT_TRAINING:
         logs = Logs(logs_file, mode='w')
-    else: logs = None
+    else:
+        logs = None
 
     callbacks = []
 
@@ -143,10 +167,10 @@ def train(
             mmk.GenerateCallback(
                 generate_loop=gen_loop,
                 every_n_epochs=every_n_epochs,
-                output_features=[net.feature, ],
+                output_features=[target_feature, ],
                 audio_logger=mmk.AudioLogger(
-                    sr=net.feature.sr,
-                    hop_length=getattr(net.feature, 'hop_length', 512),
+                    sr=target_feature.sr,
+                    hop_length=getattr(target_feature, 'hop_length', 512),
                     **(dict(filename_template=filename_template,
                             target_dir=os.path.dirname(filename_template))
                        if 'mp3' in OUTPUT_TRAINING else {}),

@@ -1,7 +1,8 @@
-from os import cpu_count
-
 import mimikit as mmk
-import h5mapper as h5m
+
+
+class Seq2SeqLSTMv0(mmk.Seq2SeqLSTM):
+    pass
 
 
 class Seq2SeqLSTM(mmk.Seq2SeqLSTM):
@@ -26,50 +27,14 @@ class Seq2SeqLSTM(mmk.Seq2SeqLSTM):
         self.hp.scaled_activation = scaled_activation
         self.hp.with_tbptt = with_tbptt
 
-    def train_dataloader(self, soundbank, batch_size, batch_length,
-                         downsampling=1, shift_error=0, batch_sampler=None):
-        hop = self.hp.hop
-        feat = self.feature
-        batch = (
-            self.feature.batch_item(shift=0, length=batch_length, downsampling=downsampling),
-            self.feature.batch_item(shift=hop+shift_error, length=batch_length, downsampling=downsampling),
-        )
-        if self.hp.with_tbptt:
-            kwargs = dict(batch_sampler=mmk.TBPTTSampler(soundbank.snd.shape[0] // feat.hop_length,
-                                                         batch_size=batch_size,
-                                                         chunk_length=batch_length * 20,
-                                                         seq_len=batch_length))
-        else:
-            kwargs = dict(batch_size=batch_size, shuffle=True)
 
-        dl = soundbank.serve(batch,
-                             num_workers=min(batch_size, cpu_count()),
-                             pin_memory=True,
-                             persistent_workers=True,
-                             **kwargs)
-        return dl
+class Seq2SeqMuLaw(mmk.Seq2SeqLSTM):
+    pass
 
-    def generate_dataloader_and_interfaces(self,
-                                           soundbank,
-                                           prompt_length,
-                                           indices=(),
-                                           batch_size=256,
-                                           temperature=None,
-                                           **kwargs
-                                           ):
-        gen_batch = (self.feature.batch_item(shift=0, length=prompt_length),)
-        gen_dl = soundbank.serve(gen_batch,
-                                 shuffle=False,
-                                 batch_size=batch_size,
-                                 sampler=indices)
 
-        interfaces = [
-            *(mmk.DynamicDataInterface(
-                None,
-                getter=h5m.AsSlice(dim=1, shift=-self.hp.hop, length=self.hp.hop),
-                setter=mmk.Setter(dim=1),
-                # output_transform=(lambda x: x.unsqueeze(1) if isinstance(self.feature, mmk.Spectrogram) else x)
-            ),),
-        ]
+class MultiSeq2SeqFFT(mmk.MultiSeq2SeqLSTM):
+    pass
 
-        return gen_dl, interfaces
+
+class MultiSeq2SeqMuLaw(mmk.MultiSeq2SeqLSTM):
+    pass
