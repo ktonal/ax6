@@ -1,0 +1,9 @@
+[submodule "mimikit"]
+	path = mimikit
+	url = https://github.com/ktonal/mimikit.git
+[submodule "h5mapper"]
+	path = h5mapper
+	url = https://github.com/ktonal/h5mapper.git
+[submodule "pypbind"]
+	path = pypbind
+	url = https://github.com/ktonal/pypbind.git
