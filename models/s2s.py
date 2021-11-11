@@ -2,7 +2,23 @@ import mimikit as mmk
 
 
 class Seq2SeqLSTMv0(mmk.Seq2SeqLSTM):
-    pass
+    feature = mmk.Spectrogram(sr=22050, n_fft=2048, hop_length=512, coordinate='mag')
+    """no input module"""
+    def __init__(self,
+                 feature=None,
+                 output_heads=4,
+                 scaled_activation=True,
+                 with_tbptt=False,
+                 **net_hp):
+        model_dim = net_hp['model_dim']
+        output_mod = feature.output_module(model_dim, feature.n_fft // 2 + 1, output_heads, scaled_activation)
+        net_hp["input_dim"] = feature.n_fft // 2 + 1
+        net_hp["output_module"] = output_mod
+        super(Seq2SeqLSTMv0, self).__init__(**net_hp)
+        self.hp.feature = self.feature = feature
+        self.hp.output_heads = output_heads
+        self.hp.scaled_activation = scaled_activation
+        self.hp.with_tbptt = with_tbptt
 
 
 class Seq2SeqLSTM(mmk.Seq2SeqLSTM):

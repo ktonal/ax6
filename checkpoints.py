@@ -36,7 +36,7 @@ def load_feature(s):
 
 
 def load_network_cls(s):
-    from ax6.models.s2s import Seq2SeqLSTM
+    from ax6.models.s2s import Seq2SeqLSTM, Seq2SeqLSTMv0
     from ax6.models.wavenets import WaveNetFFT, WaveNetQx
     from ax6.models.srnns import SampleRNN
     loc = dict()
@@ -63,7 +63,7 @@ def match_trainset_id(files, dirname, hp):
     return coll
 
 
-def group_ckpts_by_trainset(root="trainings"):
+def group_ckpts_by_trainset(root="trainings", assert_loadable=False):
     CKPTS = {}
     for ckpt in find_checkpoints(root):
         tp = CkptBank(ckpt, "r")
@@ -78,17 +78,11 @@ def group_ckpts_by_trainset(root="trainings"):
             src = [*tp.index.keys()][0]
         except IndexError:
             raise IndexError(dirname)
-        try:
+        if assert_loadable:
             tp.ckpt.load_checkpoint(load_network_cls(hp["network_class"]), src)
-            CKPTS.setdefault(trainset_coll["id"], []).append(
-                (load_network_cls(hp["network_class"]), tp, feature, [*tp.index.keys()], hp)
-            )
-            # print("+++OK++++", dirname)
-
-        except RuntimeError:  # miss matched state dict!
-            # print(type(e))
-            pass
-            # print("---NO!----", dirname)
+        CKPTS.setdefault(trainset_coll["id"], []).append(
+            (load_network_cls(hp["network_class"]), tp, feature, [*tp.index.keys()], hp)
+        )
     return CKPTS
 
 
