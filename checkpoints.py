@@ -1,17 +1,19 @@
 import dataclasses as dtc
-from typing import List, Any, Dict
-
+from google.cloud import storage
 import h5mapper as h5m
-import mimikit as mmk
 import json
 import os, sys
 
 dir2 = os.path.abspath('')
 dir1 = os.path.dirname(dir2)
-if not dir1 in sys.path:
+if dir1 not in sys.path:
     sys.path.append(dir1)
 
 from ax6.datasets import TRAINSET, gcp_sound_bank
+
+# REMAINDER : upload pwd == training :
+# gsutil -m cp epoch=*.h5 gs://ax6-outputs/checkpoints/$(basename `pwd`)
+# # find -type f -name 'epoch=*.h5' | sed 's/.\///' | gsutil -m cp -I gs://ax6-outputs/checkpoints
 
 
 def find_checkpoints(root="trainings"):
@@ -42,16 +44,6 @@ def load_network_cls(s):
     return loc["cls"]
 
 
-def load_files(files, sr):
-    if "gs://" in files[0]:
-        sb = gcp_sound_bank(sr)
-        sb.create(f"data.h5", files, parallelism="threads", n_workers=8)
-        return sb(f"data.h5", mode='r', keep_open=True)
-    else:
-        h5m.sound_bank.callback(f"data.h5", files[0], sr=sr)
-        return h5m.TypedFile("data.h5", mode='r', keep_open=True)
-
-
 def match_trainset_id(files, dirname, hp):
     if "trainset" in hp:
         return [c for c in TRAINSET if c["keywords"] == hp["trainset"]][0]
@@ -69,15 +61,6 @@ def match_trainset_id(files, dirname, hp):
 
     coll = [col for col in TRAINSET if kwrds in col["keywords"]][0]
     return coll
-
-
-@dtc.dataclass
-class Checkpoint:
-    net_cls: type
-    ckpt_bank: h5m.TypedFile
-    feature: mmk.Feature
-    epochs: List[str]
-    hp: Dict[str, Any]
 
 
 def group_ckpts_by_trainset(root="trainings"):
@@ -120,3 +103,60 @@ def group_ckpts_by_feature(root="trainings"):
             (load_network_cls(hp["network_class"]), tp, feature, [*tp.index.keys()], hp)
         )
     return CKPTS
+
+
+client = storage.Client("ax6-Project")
+
+
+@dtc.dataclass
+class Checkpoint:
+    id: str
+    epoch: int
+    bucket = "ax6-outputs"
+    root_dir = "./"
+
+    @staticmethod
+    def get_id_and_epoch(path):
+        id_, epoch = path.split("/")[-2:]
+        return id_.strip("/"), int(epoch.split(".h5")[0].split("=")[-1])
+
+    @staticmethod
+    def from_blob(blob):
+        path = blob.name
+        id_, epoch = Checkpoint.get_id_and_epoch(path)
+        ckpt = Checkpoint(id_, epoch)
+        ckpt.bucket = blob.bucket.name
+        return ckpt
+
+    @property
+    def gcp_path(self):
+        return f"gs://{self.bucket}/checkpoints/{self.id}/epoch={self.epoch}.h5"
+
+    @property
+    def os_path(self):
+        return os.path.join(self.root_dir, f"{self.id}_epoch={self.epoch}.h5")
+
+    @property
+    def blob(self):
+        return client.bucket(self.bucket).blob(f"checkpoints/{self.id}/epoch={self.epoch}.h5")
+
+    def download(self):
+        os.makedirs(self.root_dir, exist_ok=True)
+        client.download_blob_to_file(self.gcp_path, open(self.os_path, "wb"))
+        return self
+
+    @property
+    def network(self):
+        if not os.path.isfile(self.os_path):
+            self.download()
+        bank = CkptBank(self.os_path, 'r')
+        hp = bank.ckpt.load_hp()
+        return bank.ckpt.load_checkpoint(hp["cls"], "state_dict")
+
+    @property
+    def feature(self):
+        if not os.path.isfile(self.os_path):
+            self.download()
+        bank = CkptBank(self.os_path, 'r')
+        hp = bank.ckpt.load_hp()
+        return hp['feature']
