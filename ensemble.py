@@ -73,7 +73,7 @@ class Ensemble(nn.Module):
         if (t/self.base_sr+event['seconds']) < self.max_seconds:
             if self.print_events:
                 event.update({"start": t/self.base_sr})
-                pprint(event, sort_dicts=False, compact=True)
+                pprint(event)
             out = self.run_event(inputs[0], net, feature, n_steps)
             return out
         return torch.zeros(1, int(self.max_seconds * self.base_sr - t)).to("cuda")
