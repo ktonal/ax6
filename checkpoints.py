@@ -136,7 +136,11 @@ class Checkpoint:
 
     def download(self):
         os.makedirs(self.root_dir, exist_ok=True)
-        client.download_blob_to_file(self.gcp_path, open(self.os_path, "wb"))
+        try:
+            client.download_blob_to_file(self.gcp_path, open(self.os_path, "wb"))
+        except:
+            os.remove(self.os_path)
+            raise
         return self
 
     @property
