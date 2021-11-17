@@ -26,6 +26,7 @@ class WaveNetFFT(mmk.WNBlock):
                  input_heads=2,
                  output_heads=4,
                  scaled_activation=True,
+                 phs="a",
                  **block_hp
                  ):
         super(WaveNetFFT, self).__init__(**block_hp)
@@ -34,10 +35,11 @@ class WaveNetFFT(mmk.WNBlock):
         self.hp.input_heads = input_heads
         self.hp.output_heads = output_heads
         self.hp.scaled_activation = scaled_activation
+        self.hp.phs = phs
         fft_dim = self.feature.n_fft // 2 + 1
         net_dim = self.hp.dims_dilated[0]
         inpt_mods = [self.feature.input_module(fft_dim, net_dim, input_heads)]
         out_d = self.hp.skips_dim if self.hp.skips_dim is not None else self.hp.dims_dilated[0]
         outpt_mods = [self.feature.output_module(out_d, fft_dim, output_heads,
-                                                 scaled_activation=scaled_activation)]
+                                                 scaled_activation=scaled_activation, phs=phs)]
         self.with_io(inpt_mods, outpt_mods)
