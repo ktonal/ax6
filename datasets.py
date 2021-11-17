@@ -16,7 +16,8 @@ def from_gcloud(feature):
     def new_load(self, source):
         with tempfile.NamedTemporaryFile() as f:
             client.download_blob_to_file(source, f)
-            return old_load(f.name)
+            rv = old_load(f.name)
+        return rv
 
     feature.load = type(old_load)(new_load, feature)
     return feature
@@ -55,13 +56,22 @@ class Trainset:
         self.files = [f"gs://{b['bucket']}/{b['path']}" for b in collec[0]["blobs"]]
 
     @property
+    def os_path(self):
+        return os.path.join(self.root_dir, self.filename)
+
+    @property
     def filename(self):
         return f"{self.keyword}.h5"
 
     def download(self):
         os.makedirs(self.root_dir, exist_ok=True)
-        return load_files(self.files, self.sr,
-                          os.path.join(self.root_dir, self.filename))
+        return load_files(self.files, self.sr, self.os_path)
+
+    @property
+    def bank(self):
+        if not os.path.isfile(self.os_path):
+            return self.download()
+        return gcp_sound_bank(self.sr)(self.os_path, mode='r')
 
 
 table = "trainset"
