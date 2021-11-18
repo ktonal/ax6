@@ -106,8 +106,8 @@ client = storage.Client("ax6-Project")
 class Checkpoint:
     id: str
     epoch: int
+    root_dir: str = "./"
     bucket = "ax6-outputs"
-    root_dir = "./"
 
     @staticmethod
     def get_id_and_epoch(path):
@@ -128,14 +128,14 @@ class Checkpoint:
 
     @property
     def os_path(self):
-        return os.path.join(self.root_dir, f"{self.id}_epoch={self.epoch}.h5")
+        return os.path.join(self.root_dir, f"{self.id}/epoch={self.epoch}.h5")
 
     @property
     def blob(self):
         return client.bucket(self.bucket).blob(f"checkpoints/{self.id}/epoch={self.epoch}.h5")
 
     def download(self):
-        os.makedirs(self.root_dir, exist_ok=True)
+        os.makedirs(os.path.join(self.root_dir, self.id), exist_ok=True)
         try:
             client.download_blob_to_file(self.gcp_path, open(self.os_path, "wb"))
         except:

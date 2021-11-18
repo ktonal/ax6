@@ -11,6 +11,8 @@ dir1 = os.path.dirname(dir2)
 if dir1 not in sys.path:
     sys.path.append(dir1)
 
+from ax6.datasets import Trainset
+from ax6.models.nnn import NearestNextNeighbor
 from ax6.checkpoints import Checkpoint
 
 
@@ -32,7 +34,9 @@ class Ensemble(nn.Module):
         self._param = nn.Parameter(torch.ones(1))
 
     def run_event(self, inputs, net, feature, n_steps, *params):
-        prompt_getter = feature.batch_item(shift=0, length=net.rf)
+        prompt_getter = feature.batch_item(shift=0,
+                                           length=inputs.size(-1) if isinstance(net, mmk.TierNetwork) else net.rf
+                                           )
         resample = mmk.Resample(self.base_sr, feature.sr)
         n_input_samples = math.ceil(prompt_getter.getter.length * self.base_sr / feature.sr)
         prompt_getter.data = resample(inputs[:, -n_input_samples:])
@@ -71,7 +75,8 @@ class Ensemble(nn.Module):
         if t >= int(self.max_seconds * self.base_sr):
             return None
         event, net, feature, n_steps, params = self.next_event()
-        net = net.to("cuda")
+        if hasattr(net, 'to'):
+            net = net.to("cuda")
         if hasattr(net, "use_fast_generate"):
             net.use_fast_generate = True
 
@@ -85,15 +90,22 @@ class Ensemble(nn.Module):
 
     def next_event(self):
         event = next(self.stream)
-        ck = Checkpoint(event['id'], event['epoch'])
-        net, feature = ck.network, ck.feature
+        if "Checkpoint" in str(event["type"]):
+            ck = Checkpoint(event['id'], event['epoch'], event.get("root_dir", "./"))
+            net, feature = ck.network, ck.feature
+        elif "NearestNextNeighbor" in str(event["type"]):
+            feature = event['feature']
+            data = Trainset(keyword=event["keyword"], sr=feature.sr).bank
+            net = NearestNextNeighbor(feature, data.snd)
+        else:
+            raise TypeError(f"event type '{event['type']}' not recognized")
         n_steps = self.seconds_to_n_steps(event['seconds'], net, feature)
         if "temperature" in event:
             temp = event['temperature']
             if isinstance(temp, float):
-                params = torch.tensor([[temp]]).to(self.device).repeat(1, n_steps)
+                params = (torch.tensor([[temp]]).to(self.device).repeat(1, n_steps), )
             elif isinstance(temp, tuple):
-                params = torch.linspace(temp[0], temp[1], n_steps, device=self.device)
+                params = (torch.linspace(temp[0], temp[1], n_steps, device=self.device), )
             else:
                 params = tuple()
         else:

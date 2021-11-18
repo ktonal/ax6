@@ -87,3 +87,6 @@ INSECTS_X = {c["keywords"]: [f"gs://{b['bucket']}/{b['path']}" for b in c["blobs
 
 COUGH = [c for c in TRAINSET if "Cough" in c["keywords"]]
 COUGH = {c["keywords"]: [f"gs://{b['bucket']}/{b['path']}" for b in c["blobs"]] for c in COUGH}
+
+LUNGS = [c for c in TRAINSET if "Lung Collection" in c["keywords"]]
+LUNGS = {c["keywords"]: [f"gs://{b['bucket']}/{b['path']}" for b in c["blobs"]] for c in LUNGS}
