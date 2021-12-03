@@ -1,5 +1,75 @@
-from sklearn.model_selection import ParameterGrid
+from sklearn.model_selection import ParameterGrid, ParameterSampler
 import mimikit as mmk
+from itertools import product
+import numpy as np
+
+
+def instance_grid(cls, fix, *grids):
+    for params in product(*grids):
+        d = {}
+        for p in params:
+            d.update(**p)
+        if cls is not None:
+            yield cls(**fix, **d)
+        else:
+            yield dict(**fix, **d)
+
+
+def n_choices(iterable, n):
+    lst = list(iterable)
+    for x in np.random.choice(lst, n, replace=len(lst) < n):
+        yield x
+
+
+def sampler_zipper(n_samples, *grids):
+    for gs in zip(*(n_choices(g, n_samples) for g in grids)):
+        yield {k: v for g in gs for k, v in g.items()}
+
+
+def fft_grid():
+    return ParameterGrid(dict(feature=instance_grid(
+        mmk.Spectrogram, dict(center=False),
+        ParameterGrid([
+            dict(sr=[44100],
+                 )]),
+        [
+            # dict(n_fft=512, hop_length=128),
+            # dict(n_fft=1024, hop_length=128),
+            # dict(n_fft=1024, hop_length=256),
+            dict(n_fft=2048, hop_length=256),
+            # dict(n_fft=2048, hop_length=512),
+        ],
+        ParameterGrid([
+            dict(coordinate=["mag"])
+        ]),
+    )))
+
+
+def fft_io_grid():
+    return instance_grid(
+        None, {},
+        ParameterGrid([
+            dict(
+                input_heads=[1],
+                output_heads=[1],
+                scaled_activation=[True, False])  # True seems ok but WITHOUT SAMPLER
+        ])
+    )
+
+
+def optim_grid():
+    return instance_grid(
+        None,
+        dict(),
+        ParameterGrid([
+            dict(
+                batch_size=[8, 16, 24, 32],
+                max_lr=[7e-4, 5e-4, 2e-4],
+                betas=[(0.9, 0.91), (0.9, 0.92), (0.9, 0.925), (0.9, 0.95), (0.99, 0.99)],
+            )
+        ])
+    )
+
 
 WN_GRID = ParameterGrid([
     dict(

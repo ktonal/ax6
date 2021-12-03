@@ -122,6 +122,11 @@ class Checkpoint:
         ckpt.bucket = blob.bucket.name
         return ckpt
 
+    @staticmethod
+    def from_path(path):
+        basename = os.path.dirname(os.path.dirname(path))
+        return Checkpoint(*Checkpoint.get_id_and_epoch(path), root_dir=basename)
+
     @property
     def gcp_path(self):
         return f"gs://{self.bucket}/checkpoints/{self.id}/epoch={self.epoch}.h5"
@@ -158,3 +163,7 @@ class Checkpoint:
         bank = CkptBank(self.os_path, 'r')
         hp = bank.ckpt.load_hp()
         return hp['feature']
+
+    @property
+    def train_hp(self):
+        return load_trainings_hp(os.path.join(self.root_dir, self.id))

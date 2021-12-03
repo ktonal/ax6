@@ -62,7 +62,7 @@ def train(
               train_hp=train_hp)
     ID = hashlib.sha256(json.dumps(hp, cls=MyEncoder).encode("utf-8")).hexdigest()
     print("****************************************************")
-    print("ID IS :", ID, "for", hp["files"])
+    print("ID IS :", ID)
     print("****************************************************")
     hp['id'] = ID
     root_dir = os.path.join(root_dir, ID)
@@ -86,20 +86,32 @@ def train(
         input_feature.batch_item(shift=0, length=batch_length, downsampling=downsampling),
         target_feature.batch_item(shift=net.shift, length=net.output_length(batch_length), downsampling=downsampling)
     )
+    print(soundbank.snd.shape, (soundbank.snd.shape[-1] // downsampling) // batch_size)
     if tbptt_chunk_length is not None:
+        if getattr(input_feature, 'domain', '') == 'time-freq' and isinstance(getattr(batch[0], 'getter', False), h5m.Getter):
+            item_len = batch[0].getter.length
+            seq_len = item_len
+            chunk_length = item_len * tbptt_chunk_length
+            N = len(h5m.ProgrammableDataset(soundbank, batch))
+        else:  # feature is in time domain
+            seq_len = batch_length
+            chunk_length = tbptt_chunk_length
+            N = soundbank.snd.shape[0]
         loader_kwargs = dict(
             batch_sampler=mmk.TBPTTSampler(
-                soundbank.snd.shape[0] // getattr(input_feature, 'hop_length', 1),
+                N,
                 batch_size=batch_size,
-                chunk_length=tbptt_chunk_length,
-                seq_len=batch_length,
+                chunk_length=chunk_length,
+                seq_len=seq_len,
                 oversampling=oversampling
             )
         )
+        print(soundbank.snd.shape[0],
+              vars(loader_kwargs["batch_sampler"]))
     else:
         loader_kwargs = dict(batch_size=batch_size, shuffle=True)
     dl = soundbank.serve(batch,
-                         num_workers=min(batch_size, os.cpu_count()),
+                         num_workers=max(os.cpu_count(), min(batch_size, os.cpu_count())),
                          pin_memory=True,
                          persistent_workers=True,
                          **loader_kwargs
@@ -139,27 +151,28 @@ def train(
         dataloader=g_dl,
         inputs=(h5m.Input(None, h5m.AsSlice(dim=1, shift=-net.rf, length=net.rf),
                           setter=h5m.Setter(dim=1)),
-                *((h5m.Input(temperature, h5m.AsSlice(dim=1, length=1), setter=None), )
+                *((h5m.Input(temperature, h5m.AsSlice(dim=1+int(hasattr(net.hp, 'hop')), length=1),
+                             setter=None), )
                 if temperature is not None else ())),
         n_steps=n_steps,
         device='cuda' if torch.cuda.is_available() else 'cpu',
         time_hop=net.hp.get("hop", 1)
     )
 
-    class Logs(h5m.TypedFile):
-        ckpt = h5m.TensorDict(net.state_dict()) if CHECKPOINT_TRAINING else None
-        outputs = h5m.Array() if 'h5' in OUTPUT_TRAINING else None
+    # class Logs(h5m.TypedFile):
+    #     ckpt = h5m.TensorDict(net.state_dict()) if CHECKPOINT_TRAINING else None
+    #     outputs = h5m.Array() if 'h5' in OUTPUT_TRAINING else None
 
-    if "h5" in OUTPUT_TRAINING or CHECKPOINT_TRAINING:
-        logs = Logs(logs_file, mode='w')
-    else:
-        logs = None
+    # if "h5" in OUTPUT_TRAINING or CHECKPOINT_TRAINING:
+    #     logs = Logs(logs_file, mode='w')
+    # else:
+    #     logs = None
 
     callbacks = []
 
     if CHECKPOINT_TRAINING:
         callbacks += [
-            mmk.MMKCheckpoint(h5_tensor_dict=logs.ckpt, epochs=every_n_epochs)
+            mmk.MMKCheckpoint(epochs=every_n_epochs, root_dir=root_dir)
         ]
 
     if MONITOR_TRAINING or OUTPUT_TRAINING:
@@ -174,10 +187,10 @@ def train(
                     **(dict(filename_template=filename_template,
                             target_dir=os.path.dirname(filename_template))
                        if 'mp3' in OUTPUT_TRAINING else {}),
-                    **(dict(id_template="idx_{prompt_idx}",
-                            proxy_template="outputs/epoch_{epoch}/",
-                            target_bank=logs)
-                       if 'h5' in OUTPUT_TRAINING else {})
+                    # **(dict(id_template="idx_{prompt_idx}",
+                    #         proxy_template="outputs/epoch_{epoch}/",
+                    #         target_bank=logs)
+                    #    if 'h5' in OUTPUT_TRAINING else {})
                 ),
             )]
 
@@ -188,7 +201,7 @@ def train(
                 callbacks=callbacks,
                 limit_train_batches=limit_train_batches if limit_train_batches is not None else 1.
                 )
-
+    dl._iterator._shutdown_workers()
     soundbank.close()
     os.remove(soundbank.filename)
 

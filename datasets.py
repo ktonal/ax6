@@ -61,7 +61,7 @@ class Trainset:
 
     @property
     def filename(self):
-        return f"{self.keyword}.h5"
+        return f"{self.keyword}_{self.sr}.h5"
 
     def download(self):
         os.makedirs(self.root_dir, exist_ok=True)
