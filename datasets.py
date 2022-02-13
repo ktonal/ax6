@@ -3,6 +3,7 @@ import dataclasses as dtc
 from google.cloud import storage
 import tempfile
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import h5mapper as h5m
 
@@ -39,6 +40,27 @@ def load_files(files, sr, filename="data.h5"):
         return h5m.TypedFile(filename, mode='r', keep_open=True)
 
 
+def download_file(gcp_path, os_path):
+    with open(os_path, "wb") as target:
+        client.download_blob_to_file(gcp_path, target)
+    return os_path
+
+
+def download_files(files, target_root, force=False):
+    targets = [os.path.join(target_root, os.path.split(f)[1]) for f in files]
+    if not force:
+        values = zip(*[(f, t) for f, t in zip(files, targets) if not os.path.isfile(t)])
+        if not any(values):
+            return targets
+        files, targets = values
+    executor = ThreadPoolExecutor(max_workers=len(files))
+    as_completed(executor.map(
+        download_file, files, targets
+    ))
+    executor.shutdown(True)
+    return targets
+
+
 @dtc.dataclass
 class Trainset:
     keyword: str
@@ -47,6 +69,7 @@ class Trainset:
     id = ""
     files = tuple()
     root_dir = "./"
+    tmp_cache = False
 
     def __post_init__(self):
         collec = [c for c in TRAINSET if self.keyword in c["keywords"]]
@@ -63,16 +86,25 @@ class Trainset:
     def filename(self):
         return f"{self.keyword}_{self.sr}.h5"
 
-    def download(self):
-        os.makedirs(self.root_dir, exist_ok=True)
-        return load_files(self.files, self.sr, self.os_path)
-
     @property
     def bank(self):
         if not os.path.isfile(self.os_path):
             return self.download()
-        return gcp_sound_bank(self.sr)(self.os_path, mode='r')
+        return h5m.TypedFile(self.os_path, mode='r', keep_open=True)
 
+    def download(self, force=False):
+        if self.tmp_cache:
+            os.makedirs(self.root_dir, exist_ok=True)
+            return load_files(self.files, self.sr, self.os_path)
+        target_dir = os.path.join(self.root_dir, self.keyword)
+        os.makedirs(target_dir, exist_ok=True)
+        targets = download_files(self.files, target_dir, force)
+        h5m.sound_bank.callback(self.os_path, targets, sr=self.sr, parallelism="mp", n_workers=len(targets))
+        return h5m.TypedFile(self.os_path, mode='r', keep_open=True)
+
+    def upload(self):
+        pass
+    
 
 table = "trainset"
 TRAINSET = [json.loads(blob.download_as_string())
