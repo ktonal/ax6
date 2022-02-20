@@ -15,7 +15,7 @@ class MyEncoder(json.JSONEncoder):
 
 
 def train(
-        soundbank: h5m.TypedFile,
+        soundbank: h5m.SoundBank,
         net,
         input_feature=mmk.AudioSignal(sr=22050),
         target_feature=mmk.AudioSignal(sr=22050),
@@ -205,57 +205,3 @@ def train(
     soundbank.close()
     os.remove(soundbank.filename)
 
-
-def generate(
-        soundbank,
-        net,
-        filename_template=None,
-        target_dir=None,
-        id_template=None,
-        proxy_template=None,
-        target_bank=None,
-        indices=(),
-        prompt_length=32,
-        n_steps=200,
-        temperature=None,
-):
-    g_dl, g_interfaces = net.generate_dataloader_and_interfaces(
-        soundbank,
-        prompt_length=prompt_length,
-        indices=indices,
-        temperature=temperature
-    )
-    mp3 = filename_template and target_dir
-    h5 = id_template and proxy_template and target_bank
-
-    logger = mmk.AudioLogger(
-        sr=net.feature.sr,
-        hop_length=getattr(net.feature, 'hop_length', 512),
-        **(dict(filename_template=filename_template,
-                target_dir=target_dir)
-           if mp3 else {}),
-        **(dict(id_template=id_template,
-                proxy_template=proxy_template,
-                target_bank=target_bank)
-           if h5 else {})
-    )
-
-    def process_outputs(outputs, batch_idx):
-        output = net.feature.inverse_transform(outputs[0])
-        for i, out in enumerate(output):
-            idx = batch_idx * g_dl.batch_size + i
-            prompt_idx = indices[idx]
-            logger.write(out, prompt_idx=prompt_idx)
-        return
-
-    gen_loop = mmk.GenerateLoop(
-        network=net,
-        dataloader=g_dl,
-        interfaces=g_interfaces,
-        n_steps=n_steps,
-        process_outputs=process_outputs,
-        time_hop=getattr(net.hp, 'hop', 1),
-        device='cuda' if torch.cuda.is_available() else 'cpu',
-    )
-
-    gen_loop.run()

@@ -9,11 +9,7 @@ dir1 = os.path.dirname(dir2)
 if dir1 not in sys.path:
     sys.path.append(dir1)
 
-from ax6.datasets import TRAINSET, gcp_sound_bank
-
-# REMAINDER : upload pwd == training :
-# gsutil -m cp epoch=*.h5 gs://ax6-outputs/checkpoints/$(basename `pwd`)
-# # find -type f -name 'epoch=*.h5' | sed 's/.\///' | gsutil -m cp -I gs://ax6-outputs/checkpoints
+from ax6.datasets import TRAINSET
 
 
 def find_checkpoints(root="trainings"):
@@ -139,14 +135,19 @@ class Checkpoint:
     def blob(self):
         return client.bucket(self.bucket).blob(f"checkpoints/{self.id}/epoch={self.epoch}.h5")
 
-    def download(self):
-        os.makedirs(os.path.join(self.root_dir, self.id), exist_ok=True)
+    def download(self, force=False):
+        os.makedirs(os.path.dirname(self.os_path), exist_ok=True)
+        if os.path.isfile(self.os_path) and not force:
+            return self
         try:
             client.download_blob_to_file(self.gcp_path, open(self.os_path, "wb"))
         except:
-            os.remove(self.os_path)
+            self.delete()
             raise
         return self
+
+    def delete(self):
+        os.remove(self.os_path)
 
     @property
     def network(self):

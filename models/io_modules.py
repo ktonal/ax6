@@ -1,52 +1,55 @@
-import mimikit as mmk
 import torch.nn as nn
 import torch
+
+from mimikit.modules import *
+from mimikit.networks import *
 
 
 def qx_io(q_levels, net_dim, mlp_dim, mlp_activation=nn.ReLU()):
     return nn.Embedding(q_levels, net_dim), \
-           mmk.SingleClassMLP(net_dim, mlp_dim, q_levels, mlp_activation)
+           SingleClassMLP(net_dim, mlp_dim, q_levels, mlp_activation)
 
 
 def mag_spec_io(spec_dim, net_dim, in_chunks, out_chunks, scaled_activation=False):
-    return mmk.Chunk(nn.Linear(spec_dim, net_dim * in_chunks),
-                     in_chunks, sum_out=True), \
-           nn.Sequential(mmk.Chunk(nn.Linear(net_dim, spec_dim * out_chunks),
-                                   out_chunks, sum_out=True),
-                         mmk.ScaledSigmoid(spec_dim, with_range=False) if scaled_activation else mmk.Abs())
+    return Chunk(nn.Linear(spec_dim, net_dim * in_chunks),
+                 in_chunks, sum_out=True), \
+           nn.Sequential(Chunk(nn.Linear(net_dim, spec_dim * out_chunks),
+                               out_chunks, sum_out=True),
+                         ScaledSigmoid(spec_dim, with_range=False) if scaled_activation else Abs())
 
 
-def pol_spec_io(spec_dim, net_dim, in_chunks, out_chunks, scaled_activation=False):
+def pol_spec_io(spec_dim, net_dim, in_chunks, out_chunks, scaled_activation=False, phs='a'):
     pi = torch.acos(torch.zeros(1)).item()
-    act_phs = mmk.ScaledTanh(spec_dim, with_range=False) if scaled_activation else nn.Tanh()
-    act_mag = mmk.ScaledSigmoid(spec_dim, with_range=False) if scaled_activation else mmk.Abs()
+    # act_phs = ScaledTanh(out_dim, with_range=False) if scaled_activation else nn.Tanh()
+    # act_phs = nn.Tanh()
+    act_phs = nn.Identity() if phs in ("a", "b") else nn.Tanh()
+    act_mag = ScaledSigmoid(spec_dim, with_range=False) if scaled_activation else Abs()
 
-    class ScaledPhase(mmk.HOM):
+    class ScaledPhase(HOM):
         def __init__(self):
             super(ScaledPhase, self).__init__(
                 "x -> phs",
-                (nn.Sequential(mmk.Chunk(nn.Linear(net_dim, spec_dim * out_chunks), out_chunks, sum_out=True), act_phs),
+                *(Maybe(phs == "b",
+                        (lambda self, x: torch.cos(self.psis.to(x) * x) * pi, "self, x -> x"))),
+                (nn.Sequential(Chunk(nn.Linear(net_dim, spec_dim * out_chunks), out_chunks, sum_out=True), act_phs),
                  'x -> phs'),
-                (lambda self, phs: torch.cos(
-                    phs * self.psis.to(phs).view(*([1] * (len(phs.shape) - 1)), -1)) * pi,
-                 'self, phs -> phs'),
+                *(Maybe(phs == "a",
+                        (lambda self, phs: torch.cos(
+                            phs * self.psis.to(phs).view(*([1] * (len(phs.shape) - 1)), -1)) * pi,
+                         'self, phs -> phs'))),
+                *(Maybe(phs in ("b", "c"),
+                        (lambda self, phs: phs * pi, 'self, phs -> phs'))),
             )
-            self.psis = nn.Parameter(torch.ones(spec_dim))
+            self.psis = nn.Parameter(torch.ones(*((spec_dim,) if phs in ("a", "c") else (1, net_dim))))
 
-    return mmk.HOM('x -> x',
-                   (mmk.Flatten(2), 'x -> x'),
-                   (mmk.Chunk(
-                       nn.Linear(spec_dim * 2, net_dim * in_chunks),
-                       in_chunks, sum_out=True),
-                    'x -> x')), \
-           mmk.HOM("x -> y",
-                   # phase module
-                   (ScaledPhase(), 'x -> phs'),
-                   # magnitude module
-                   (nn.Sequential(mmk.Chunk(
-                       nn.Linear(net_dim, spec_dim * out_chunks),
-                       out_chunks, sum_out=True),
-                       act_mag),
-                    'x -> mag'),
-                   (lambda mag, phs: torch.stack((mag, phs), dim=-1), "mag, phs -> y")
-                   )
+    return HOM('x -> x',
+               (Flatten(2), 'x -> x'),
+               (Chunk(nn.Linear(spec_dim * 2, net_dim * in_chunks), in_chunks, sum_out=True), 'x -> x')), \
+           HOM("x -> y",
+               # phase module
+               (ScaledPhase(), 'x -> phs'),
+               # magnitude module
+               (nn.Sequential(Chunk(nn.Linear(net_dim, spec_dim * out_chunks), out_chunks, sum_out=True), act_mag),
+                'x -> mag'),
+               (lambda mag, phs: torch.stack((mag, phs), dim=-1), "mag, phs -> y")
+               )

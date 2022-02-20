@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import h5mapper as h5m
 
-
 client = storage.Client("ax6-Project")
 
 
@@ -27,16 +26,17 @@ def from_gcloud(feature):
 def gcp_sound_bank(sr=16000):
     class GCPSoundBank(h5m.TypedFile):
         snd = from_gcloud(h5m.Sound(sr=sr, mono=True, normalize=True))
+
     return GCPSoundBank
 
 
-def load_files(files, sr, filename="data.h5"):
-    if "gs://" in files[0]:
+def load_blobs(blobs, sr, filename="data.h5"):
+    if "gs://" in blobs[0]:
         sb = gcp_sound_bank(sr)
-        sb.create(filename, files, parallelism="threads", n_workers=8)
+        sb.create(filename, blobs, parallelism="threads", n_workers=8)
         return sb(filename, mode='r', keep_open=True)
     else:
-        h5m.sound_bank.callback(filename, files[0], sr=sr)
+        h5m.sound_bank.callback(filename, blobs[0], sr=sr)
         return h5m.TypedFile(filename, mode='r', keep_open=True)
 
 
@@ -46,16 +46,16 @@ def download_file(gcp_path, os_path):
     return os_path
 
 
-def download_files(files, target_root, force=False):
-    targets = [os.path.join(target_root, os.path.split(f)[1]) for f in files]
+def download_blobs(blobs, target_root, force=False):
+    targets = [os.path.join(target_root, os.path.split(f)[1]) for f in blobs]
     if not force:
-        values = zip(*[(f, t) for f, t in zip(files, targets) if not os.path.isfile(t)])
+        values = [(f, t) for f, t in zip(blobs, targets) if not os.path.isfile(t)]
         if not any(values):
             return targets
-        files, targets = values
-    executor = ThreadPoolExecutor(max_workers=len(files))
+        blobs, targets = zip(*values)
+    executor = ThreadPoolExecutor(max_workers=len(blobs))
     as_completed(executor.map(
-        download_file, files, targets
+        download_file, blobs, targets
     ))
     executor.shutdown(True)
     return targets
@@ -63,28 +63,37 @@ def download_files(files, target_root, force=False):
 
 @dtc.dataclass
 class Trainset:
-    keyword: str
+    table: str
+    keyword: str = ""
+    id: str = ""
     sr: int = 22050
 
-    id = ""
-    files = tuple()
+    blobs = list()
+    files = list()
     root_dir = "./"
     tmp_cache = False
 
     def __post_init__(self):
-        collec = [c for c in TRAINSET if self.keyword in c["keywords"]]
+        table = [json.loads(blob.download_as_string())
+                 for blob in client.list_blobs(client.bucket("axx-data"), prefix=f"tables/{self.table}/collections")
+                 if blob.content_type == "application/json"]
+        collec = [c for c in table
+                  if (self.keyword and self.keyword in c["keywords"]) or (self.id and self.id in c["id"])]
         if len(collec) == 0:
-            raise ValueError(f"keyword '{self.keyword}' couldn't be found in any trainset collections")
+            raise ValueError(f"neither keyword '{self.keyword}' nor id `{self.id}`"
+                             f" could be found in {self.table}")
         self.id = collec[0]["id"]
-        self.files = [f"gs://{b['bucket']}/{b['path']}" for b in collec[0]["blobs"]]
+        self.blobs = [f"gs://{b['bucket']}/{b['path']}" for b in collec[0]["blobs"]]
+        self.files = [os.path.join(self.root_dir, self.keyword, os.path.split(f)[1])
+                      for f in self.blobs]
 
     @property
     def os_path(self):
-        return os.path.join(self.root_dir, self.filename)
+        return os.path.join(self.root_dir, self.keyword or self.id[:12], self.filename)
 
     @property
     def filename(self):
-        return f"{self.keyword}_{self.sr}.h5"
+        return f"{self.keyword or self.id[:12]}_{self.sr}.h5"
 
     @property
     def bank(self):
@@ -93,18 +102,22 @@ class Trainset:
         return h5m.TypedFile(self.os_path, mode='r', keep_open=True)
 
     def download(self, force=False):
-        if self.tmp_cache:
-            os.makedirs(self.root_dir, exist_ok=True)
-            return load_files(self.files, self.sr, self.os_path)
-        target_dir = os.path.join(self.root_dir, self.keyword)
-        os.makedirs(target_dir, exist_ok=True)
-        targets = download_files(self.files, target_dir, force)
-        h5m.sound_bank.callback(self.os_path, targets, sr=self.sr, parallelism="mp", n_workers=len(targets))
-        return h5m.TypedFile(self.os_path, mode='r', keep_open=True)
+        if force or not os.path.isfile(self.os_path):
+            if self.tmp_cache:
+                os.makedirs(self.root_dir, exist_ok=True)
+                return load_blobs(self.blobs, self.sr, self.os_path)
+            target_dir = os.path.dirname(self.os_path)
+            os.makedirs(target_dir, exist_ok=True)
+            targets = download_blobs(self.blobs, target_dir, force)
+            h5m.sound_bank.callback(self.os_path, targets, sr=self.sr, parallelism="mp", n_workers=len(targets))
+        return self
+
+    def delete(self):
+        os.remove(self.os_path)
 
     def upload(self):
         pass
-    
+
 
 table = "trainset"
 TRAINSET = [json.loads(blob.download_as_string())

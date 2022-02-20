@@ -1,5 +1,6 @@
 import mimikit as mmk
-from itertools import chain
+
+from .io_modules import *
 
 
 class WaveNetQx(mmk.WNBlock):
@@ -10,19 +11,15 @@ class WaveNetQx(mmk.WNBlock):
         if feature is not None:
             self.hp.feature = self.feature = feature
         self.hp.mlp_dim = mlp_dim
-        inpt_mods = [feat.input_module(d)
-                     for feat, d in zip([feature], chain(self.hp.dims_dilated, self.hp.dims_1x1))]
-        out_d = self.hp.skips_dim if self.hp.skips_dim is not None else self.hp.dims_dilated[0]
-        outpt_mods = [feat.output_module(out_d, mlp_dim=mlp_dim)
-                      for feat in [feature]]
-        self.with_io(inpt_mods, outpt_mods)
+        inpt_mod, outpt_mod = qx_io(feature.q_levels, self.hp.dims_dilated[0], mlp_dim)
+        self.with_io([inpt_mod], [outpt_mod])
 
 
 class WaveNetFFT(mmk.WNBlock):
     feature = mmk.Spectrogram(sr=22050, n_fft=2048, hop_length=512, coordinate='mag')
 
     def __init__(self,
-                 feature,
+                 feature: mmk.Spectrogram,
                  input_heads=2,
                  output_heads=4,
                  scaled_activation=True,
@@ -38,8 +35,10 @@ class WaveNetFFT(mmk.WNBlock):
         self.hp.phs = phs
         fft_dim = self.feature.n_fft // 2 + 1
         net_dim = self.hp.dims_dilated[0]
-        inpt_mods = [self.feature.input_module(fft_dim, net_dim, input_heads)]
-        out_d = self.hp.skips_dim if self.hp.skips_dim is not None else self.hp.dims_dilated[0]
-        outpt_mods = [self.feature.output_module(out_d, fft_dim, output_heads,
-                                                 scaled_activation=scaled_activation, phs=phs)]
-        self.with_io(inpt_mods, outpt_mods)
+        if feature.coordinate == "mag":
+            inpt_mod, outpt_mod = mag_spec_io(fft_dim, net_dim, input_heads, output_heads, scaled_activation)
+        elif feature.coordinate == "pol":
+            inpt_mod, outpt_mod = pol_spec_io(fft_dim, net_dim, input_heads, output_heads, scaled_activation, phs)
+        else:
+            raise ValueError(f"WaveNetFFT doesn't support coordinate of type {feature.coordinate}")
+        self.with_io([inpt_mod], [outpt_mod])
